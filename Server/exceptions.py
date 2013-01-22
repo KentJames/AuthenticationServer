@@ -1,0 +1,3 @@
+
+class ServerBaseException(Exception):
+    pass
