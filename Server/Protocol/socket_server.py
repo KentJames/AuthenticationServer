@@ -2,35 +2,54 @@
 
 from .. import exceptions
 from .framesync import *
-import socket
-import sys
-import time
+from .Authentication import fileservice
+import socket,sys,time,pickle
 
+
+#Define server exceptions:
+
+#Invalid host exception:
 
 class InvalidHost(exceptions.ServerBaseException):
     pass
 
+
+#Invalid port exception:
+
+
 class InvalidPort(exceptions.ServerBaseException):
     pass
+
+#I don't know why I put this here?
 
 class ForceClose(exceptions.ServerBaseException):
     pass
     
 
 
+'''
+This is the class which wraps the objects for creating a server for our file transfer tool.
 
+This class is never really expected to be instantiated as a standalone class of its own, 
+but through inheritance, in this case with the socket_server_command
+
+'''
 
 class socket_server_data(object):
 
     def __init__(self,HOST = None,PORT = None,s = None):
         
         
+        #Used for buffering data received from socket.
+        self.receivedatabuffer = b''
 
-        self.receivedatabuffer = None
+        ####Socket Host and Port####
+        self.HOST = HOST
+        self.PORTdata = PORT
+        #####################
 
-        
-        self.HOST = None
-        self.PORTdata = None
+
+        ####Socket variables####
         self.sd = None
 
         self.resd = None
@@ -44,10 +63,19 @@ class socket_server_data(object):
         self.connd = None
         self.addrd = None
 
+        #########################
+
+
+
+        #Object used for final storage of serialised binary data before being saved with extension received.
         self.datatransfer = None
+        
+        self.FileInfo={}
+        self.ReceivedFile = None
 
     def connectdatasocket(self):
 
+        print("Attempting to open server data socket")
 
         for self.resd in socket.getaddrinfo(self.HOST, self.PORTdata, socket.AF_UNSPEC,
                                       socket.SOCK_STREAM, 0, socket.AI_PASSIVE):
@@ -61,8 +89,9 @@ class socket_server_data(object):
 
             
             try:
+                print("Listening for data connection")
                 self.sd.bind(self.sad)
-                self.sd.listen(1)
+                self.sd.listen(0)
             except socket.error as msg:
                 self.sd.close()
                 self.sd=None
@@ -72,29 +101,73 @@ class socket_server_data(object):
 
             
         if self.sd is None:
-            print("Attempt to open socket failed")
+            print("Attempt to open data socket failed")
+            raise ForceClose("Something went horribly wrong")
         else:
 
 
-            print("Listening for socket connection...")
+            print("Listening for data socket connection...")
             self.connd, self.addrd = self.sd.accept()
-            print("Connected to:",self.addrd)
-            self.receivefiledata()
+            print("Successfully Connected to:",self.addrd)
+            
 
     def receivefiledata(self):
 
-        while True:
+        print("Saving to: ", self.FileInfo['Filename'])
+
+        self.datatransfer = None
+
+        while self.datatransfer !=b'':
             
-            self.datatransfer = self.connd.recv(1024)
-            self.receiveddatabuffer += self.datatransfer
-            if not self.datatransfer:
-                self.storedata()
-                break
-            
+            self.datatransfer = self.connd.recv(BufferSize)
+            #print("Received data: ",self.datatransfer)
+            self.receivedatabuffer += self.datatransfer
+
+
+
         
 
     def storedata(self):
-        pass
+        
+        
+        self.ReceivedFile = open(self.FileInfo['Filename'],'wb+')
+        self.ReceivedFile.write(self.receivedatabuffer)
+        self.ReceivedFile.close()
+
+        self.receivedatabuffer = b''
+
+
+
+    def datasocketcleanup(self):
+
+        ####Socket variables####
+
+        self.resd = None
+
+        self.afd = None
+        self.socktyped = None
+        self.protod = None
+        self.canonnamed = None
+        self.sad = None
+
+        self.connd = None
+        self.addrd = None
+
+        #########################
+        
+
+
+'''
+
+This class inherits from the data socket server defined above, and this 
+is what wraps the protocol variables, which controls the flow of data through the data socket.
+
+
+The command socket carries all but the raw binary of the object being sent, including the file
+extension, the file size and the md5 hash of the file.
+
+It is instantiated through a HOST and PORT and with a set of options which change its behaviour.
+'''
         
 
 
@@ -105,6 +178,8 @@ class socket_server_command(socket_server_data):
 
 
     def __init__(self,HOST=None,PORTcommand=None,s=None, TestCommand = False):
+
+        #Instantiate data socket.
 
         socket_server_data.__init__(self)
 
@@ -194,58 +269,89 @@ class socket_server_command(socket_server_data):
 
     def listenfortransmission(self):
 
+        
+        ##Main loop for the server
+
         while True:
-            try:
+            
 
-                #Incorporate small delay to stop excessive cpu usage.
+            #Incorporate small delay to stop excessive cpu usage.
 
-                time.sleep(0.01)
+            time.sleep(0.01)
 
-                #Receive data from client:
-                self.data = self.connc.recv(1024)
+            #Receive data from client:
+            self.data = self.connc.recv(BufferSize)
                 
                 
                 
-                #Reflect data back to source to confirm reception.
-                self.connc.send(self.data)
-                if self.data ==b'END':
-                    print("End data sequence detected. Exiting...")
+            #Reflect data back to source to confirm reception.
+            self.connc.send(self.data)
+            if self.data ==EndSequence:
+                print("End data sequence detected. Exiting...")
 
-                elif self.data==b'DATACONNECT':
+            elif self.data==ConnectDataSocket:
                     
-                    try:
+                    
                         
-                        self.connectdatasocket()
+                self.connectdatasocket()
 
-                    except socket.error as msg:
-
-                        print(msg)
+                    
 
                         
-                elif self.data==b'TEST':
-                    print("Received data:",repr(self.data))
-                    print("Test sequence detected.")
+            elif self.data==TestString:
+
+                #print("Received data:",repr(self.data))
+                print("Test sequence detected.")
                     
                     
-                elif self.data ==KillSocket:
-                    print("Terminate Command Socket sequence detected. Exiting...")
-                    self.connc.close()
-                    sys.exit(0)
-                    break
+            elif self.data ==KillSocket:
 
-                elif not self.data:
-                    print("Client disconnect detected, attempting verification...")
-                    self.clientdisconnect = True
-                    break
-
-
-                else:
-                    pass
-                
-
-            except:
-                print("Socket Closed by client before end sequence transmitted")
+                print("Terminate Command Socket sequence detected. Exiting...")
+                self.connc.close()
+                sys.exit(0)
                 break
+
+            elif self.data ==SendFileParameters:
+
+                self.receivedictionarypickled = self.connc.recv(BufferSize)
+                self.FileInfo = pickle.loads(self.receivedictionarypickled)
+                self.connc.send(self.receivedictionarypickled)
+                self.parametersreceived = True
+                self.receivedictionarypickled = None
+
+
+            elif self.data ==StartSequence:
+
+                print("Client preparing to transmit data...")
+
+                if self.parametersreceived is not True:
+
+                    raise InvalidFrameSync("Error: File paramters not received from client")
+
+                self.parametersreceived = False
+                
+                self.receivefiledata()
+                self.storedata()
+                self.connd.close()
+
+
+                
+
+                
+
+
+
+            elif not self.data:
+                print("Client disconnect detected, attempting verification...")
+                self.clientdisconnect = True
+                break
+
+
+            else:
+                pass
+                
+
+            
 
 
 

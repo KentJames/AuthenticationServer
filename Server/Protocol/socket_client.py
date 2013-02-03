@@ -3,30 +3,39 @@
 
 from .. import exceptions
 from .framesync import *
-from . import fileservice
+from .Authentication import fileservice
 import socket
 import sys
+import pickle
 
-#HOST = '192.168.0.7'                  # The remote host
-#PORT = 50006             # The same port as used by the server
+
 
 
 #Define Exceptions:
 
+#Network Exceptions:
+
 class InvalidHostClient(exceptions.ServerBaseException):
     pass
+
 
 class InvalidPortClient(exceptions.ServerBaseException):
     pass
 
+
 class InvalidFrameSync(exceptions.ServerBaseException):
     pass
+
+
+#I/O Exceptions:
 
 class FileException(exceptions.ServerBaseException):
     pass
 
+
 class FilePathException(FileException):
     pass
+
 
 class FiletypeException(FileException):
     pass
@@ -38,10 +47,10 @@ class FiletypeException(FileException):
 
 class socket_client_data(object):
 
-    def __init__(self,HOST = None, PORT = None, s = None):
+    def __init__(self,HOST = None, PORT = None, PATH = None, s = None):
 
-        self.HOST = None
-        self.PORTdata = None
+        self.HOST = HOST
+        self.PORTdata = PORT
         self.sd = None
 
         self.resd = None
@@ -56,10 +65,16 @@ class socket_client_data(object):
         self.addrd = None
 
 
-        self.FilePath = None
+        self.FilePath = PATH
         self.filetosend = None
+        self.FileInfo = None
+
+        #Used for creating a standalone dictionary for pickling for security reasons.
+        self.FileInfoDict = {}
 
         self.datareceived = None
+
+
 
     def connectdatasocket(self):
 
@@ -72,9 +87,12 @@ class socket_client_data(object):
                 print(msg)
                 self.sd = None
                 continue
+
             try:
+                print("Data socket connected to: ",self.sad)
                 self.sd.connect(self.sad)
             except socket.error as msg:
+
                 print(msg)
                 self.sd.close()
                 self.sd = None
@@ -86,16 +104,56 @@ class socket_client_data(object):
             raise socket.error("Could not open socket. Check server, or client PORT.")
             #sys.exit(1)
 
+    def openfile(self):
+        
+        try:
+
+            self.filetosend = open(self.FilePath,'rb')
+
+        except IOError:
+
+            raise FileNotFoundError
+        
+        except TypeError:
+
+            raise FileNotFoundError
 
 
-    def opendatasource(self):
 
-            self.filetosend = fileservice.fileservice(self.FilePath)
+    def getfiledata(self):
+
+        self.FileInfo = fileservice.fileservice(self.FilePath)
+
+
+        self.FileInfoDict.update({'Extension': self.FileInfo['Extension']})
+        self.FileInfoDict.update({'FileSize': self.FileInfo['FileSize']})
+        self.FileInfoDict.update({'md5': self.FileInfo['md5']})
+        self.FileInfoDict.update({'Filename': self.FileInfo['Filename']})
 
 
     def senddata(self):
 
-            pass
+        self.block = None
+
+        for self.block in iter(lambda: self.filetosend.read(BufferSize),b""):
+
+            #Update the hash algorithm with the bytes we have read
+            try:
+
+                self.sd.send(self.block)
+
+
+            except socket.error:
+
+                print("Why the fuck is this happening?")
+
+
+        return True
+
+
+
+
+    ##For pinging a servers data socket. Not actually called yet but here just in case.
 
     def sendtestsequencedata(self):
 
@@ -105,8 +163,8 @@ class socket_client_data(object):
            #Attempt to send string...     
                 self.sd.send(TestString.encode('utf8'))
                 print("Transmitting...")
-                self.datareceived = self.sd.recv(1024)   
-                print('Received:', data)
+                self.datareceived = self.sd.recv(BufferSize)   
+                print('Received:', self.datareceived)
                 # s.close()
             except AttributeError as msg:
                 print(msg)
@@ -118,31 +176,37 @@ class socket_client_data(object):
 
         
 
-class socket_client_command(socket_client_data):
+class socket_client_command(object):
 
-    def __init__(self, HOSTclient = None, PORTcommand= None,s = None,
-                 TestClientCommand = False, TestClientData = False,FilePath = None):
+    def __init__(self,FilePath = None, HOSTclient = None, PORTcommand= None,s = None,
+                 TestClientCommand = False, TestClientData = False):
         
 
-        socket_client_data.__init__(self)
+        
 
         self.HOST = HOSTclient
         self.PORTcommand = PORTcommand
         self.PORTdata = self.PORTcommand + 1
         self.sc = s
-        self.sd = s
+        
+
+        self.datasocket = None
 
         if self.HOST is None:
-            raise InvalidHostClient("Invalid Hostname")
+            raise InvalidHostClient("No Hostname specified")
 
         if self.PORTcommand is None:
-            raise InvalidPortClient("Invalid Port")
+            raise InvalidPortClient("No portname specified")
 
         self.FilePath = FilePath
+
+        #socket_client_data.__init__(self,self.HOST,self.PORTdata,self.FilePath)
+
         self.TestClientCommand = TestClientCommand
 
         if self.FilePath is None and self.TestClientCommand==False:
             raise FilePathException("No File Specified to Transmit")
+
         
 
         self.resc = None
@@ -166,7 +230,7 @@ class socket_client_command(socket_client_data):
             
         else:
             
-            pass
+            self.beginsendingdata()
 
         
     def connectcommandsocket(self):
@@ -198,7 +262,7 @@ class socket_client_command(socket_client_data):
             raise socket.error("Could not open socket")
             sys.exit(1)
         else:
-            print("Socket opened perfectly!")
+            print("Command socket connected to: ",self.sac)
 
     def sendtestsequencecommand(self):
 
@@ -211,7 +275,7 @@ class socket_client_command(socket_client_data):
 
                 try:
 
-                    self.datareceivedcommand = self.sc.recv(1024)   
+                    self.datareceivedcommand = self.sc.recv(BufferSize)   
 
                 except WindowsError as msg:
 
@@ -226,12 +290,6 @@ class socket_client_command(socket_client_data):
                 self.sc.close()
             except OSError as msg:
                 print(msg)
-            
-                
-
-
-        
-
 
     def EndTransmission(self,HardKill = False):
 
@@ -244,7 +302,7 @@ class socket_client_command(socket_client_data):
 
                 print("Sending Kill Code...")
                 self.sc.send(KillSocket)
-                self.data = self.sc.recv(1024)
+                self.data = self.sc.recv(BufferSize)
                 if self.data ==KillSocket:
 
                     #Close data socket.
@@ -265,6 +323,84 @@ class socket_client_command(socket_client_data):
                 except OSError:
 
                     print("Closing Socket Problem Occured")
+
+
+
+
+    '''
+    The client centrepiece, as it manages the logic for connecting data ports
+    and managing the transfer of the raw file data as well as critical information such
+    as file extension, md5 hash, and file size.
+
+    '''
+
+    def beginsendingdata(self):
+
+        #Send command to server to connect data socket.
+
+        self.sc.send(ConnectDataSocket)
+        self.datareceivedcommand = self.sc.recv(BufferSize)
+        #print(self.datareceivedcommand)
+
+
+        if not self.datareceivedcommand==ConnectDataSocket:
+            raise InvalidFrameSync("Server did not respond correctly: socket_client_command.beginsendingdata")
+            
+        
+        #print("Data socket request received by server, attempting to connect to data socket!")
+
+        self.datasocket = socket_client_data(self.HOST, self.PORTdata, self.FilePath)
+        #print("Datasocket insantiated")
+        self.datasocket.connectdatasocket()
+        #print("Data socket connected")
+
+
+        #Open file and get data about the file.
+        self.datasocket.openfile()
+        self.datasocket.getfiledata()
+
+        self.sc.send(SendFileParameters)
+
+        self.datareceivedcommand=self.sc.recv(BufferSize)
+
+        if not self.datareceivedcommand==SendFileParameters:
+            raise InvalidFrameSync("Server did not respond correctly: socket_client_command.beginsendingdata: SendFileParameters")
+        
+        self.sc.send(pickle.dumps(self.datasocket.FileInfoDict))
+        self.datareceivedcommand = self.sc.recv(BufferSize)
+
+        if not self.datareceivedcommand ==pickle.dumps(self.datasocket.FileInfoDict):
+
+            self.sc.send(KillSocket)
+            raise InvalidFrameSync("Server responded incorrectly to pickled data. Connection may be compromised. Kill code engaged.")
+
+        self.sc.send(StartSequence)
+        
+        self.datareceived = self.sc.recv(BufferSize)
+
+        if not self.datareceived ==StartSequence:
+            raise InvalidFrameSync("StartSequence byte not repeated")
+
+        self.datasocket.senddata()
+
+        #Close data socket
+        self.datasocket.sd.close()
+
+
+
+
+
+
+
+
+            
+
+            
+
+
+
+        ##############
+            
 
 
     
